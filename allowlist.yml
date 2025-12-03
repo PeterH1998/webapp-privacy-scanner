@@ -1,0 +1,9 @@
+# Paths and patterns that GitLeaks should ignore.
+# Keep these in sync with gitleaks.toml allowlist.paths and regexes.
+paths:
+  - (?i).*\.env\.example$
+  - ^docs/examples/.*
+  - ^tests/fixtures/.*
+regexes:
+  - testuser@test\.local
+  - testpassword123

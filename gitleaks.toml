@@ -1,6 +1,34 @@
+# GitLeaks configuration for Webapp Privacy Scanner
+# This configuration leverages the default GitLeaks rules, adds repository-specific allowlists,
+# and outputs results in formats suitable for CI consumption.
+
 title = "Webapp Privacy Scanner GitLeaks Config"
 
-[[rules]]
-description = "Ignore env example files"
-path = '''.*\.env\.example$'''
-allowlist = true
+[extend]
+  useDefault = true
+
+# Fail the scan when high-severity secrets are present to keep CI strict
+failOnSeverity = "high"
+
+# Configure multiple reports for CI tooling and local review
+[[report]]
+  format = "sarif"
+  path = "reports/gitleaks.sarif"
+  redact = true
+
+[[report]]
+  format = "json"
+  path = "reports/gitleaks.json"
+  redact = true
+
+[allowlist]
+  description = "Repository allowlist for known safe patterns and files"
+  regexes = [
+    '''testuser@test\.local''',
+    '''testpassword123'''
+  ]
+  paths = [
+    '''(?i).*\.env\.example$''',
+    '''^docs/examples/.*''',
+    '''^tests/fixtures/.*'''
+  ]

@@ -1,5 +1,19 @@
+# Allowlist configuration for the PII/GDPR scanner
+# Paths use glob-style patterns relative to the repository root.
 paths:
-  - "tests/fixtures/*"
+  - .git/**
+  - node_modules/**
+  - .next/**
+  - reports/**
+  - coverage/**
+  - dist/**
+  - build/**
+  - "*.log"
+  - "*.lock"
 
-regexes:
-  - "example@example.com"
+# Regex or literal patterns to ignore when matching PII
+patterns:
+  - testuser@test.local
+  - "555-555-5555"
+  - "000-00-0000"
+  - "testpassword123"

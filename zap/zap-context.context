@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<context>
+    <name>nextjs-app-context</name>
+    <desc>Context for authenticated scanning of the Next.js application.</desc>
+    <includeRegexes>
+        <includeRegex>http://localhost:3000/dashboard.*</includeRegex>
+    </includeRegexes>
+    <excludeRegexes>
+        <excludeRegex>http://localhost:3000/_next/.*</excludeRegex>
+        <excludeRegex>http://localhost:3000/images/.*</excludeRegex>
+    </excludeRegexes>
+    <technologies>
+        <technology type="All"/>
+    </technologies>
+    <authentication>
+        <method name="formBasedAuthentication">
+            <param name="loginUrl" value="http://localhost:3000/api/login"/>
+            <param name="loginRequestData" value='{"email":"testuser@test.local","password":"testpassword123"}'/>
+        </method>
+        <verificationStrategy type="poll">
+            <poll frequency="60" units="requests"/>
+            <loggedInRegex>session=valid</loggedInRegex>
+        </verificationStrategy>
+    </authentication>
+    <sessionManagement>
+        <method name="cookieBasedSessionManagement">
+            <param name="sessionToken" value="session"/>
+        </method>
+    </sessionManagement>
+    <users>
+        <user>
+            <name>ZAP-Test-User</name>
+            <enabled>true</enabled>
+            <credentials>
+                <param name="email" value="testuser@test.local"/>
+                <param name="password" value="testpassword123"/>
+            </credentials>
+        </user>
+    </users>
+</context>
