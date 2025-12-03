@@ -1,0 +1,266 @@
+name: Security Pipeline
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - '**'
+
+concurrency:
+  group: security-pipeline-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+    env:
+      REPORT_DIR: reports
+      NODE_ENV: production
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: src/scanner/requirements.txt
+
+      - name: Create reports directory
+        run: mkdir -p $REPORT_DIR
+
+      - name: Install Python dependencies
+        run: pip install -r src/scanner/requirements.txt
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build Next.js app
+        run: npm run build
+
+      - name: Start Next.js server
+        id: start_server
+        run: |
+          nohup npm start -- --port 3000 > /tmp/next.log 2>&1 &
+          echo $! > /tmp/next.pid
+          for i in {1..30}; do
+            if curl -sSf http://localhost:3000/login >/dev/null; then
+              echo "ready=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Next.js server did not become ready"
+          tail -n 100 /tmp/next.log || true
+          exit 1
+
+      - name: Install GitLeaks
+        run: |
+          if ! command -v gitleaks >/dev/null 2>&1; then
+            curl -sSfL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_x64.tar.gz \
+              | sudo tar -xz -C /usr/local/bin gitleaks
+          fi
+
+      - name: Run GitLeaks
+        id: gitleaks
+        continue-on-error: true
+        run: |
+          set +e
+          gitleaks detect \
+            --source . \
+            --config gitleaks.toml \
+            --report-path $REPORT_DIR/gitleaks.json \
+            --report-format json \
+            --exit-code 1
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          if [ "$EXIT_CODE" -eq 0 ]; then
+            echo "status=pass" >> $GITHUB_OUTPUT
+          else
+            echo "status=fail" >> $GITHUB_OUTPUT
+          fi
+          exit 0
+
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      - name: Run Snyk scan (Node)
+        id: snyk_node
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          set +e
+          snyk test --json-file-output $REPORT_DIR/snyk_node.json --severity-threshold=high
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          if [ "$EXIT_CODE" -eq 0 ]; then
+            echo "status=pass" >> $GITHUB_OUTPUT
+          else
+            echo "status=fail" >> $GITHUB_OUTPUT
+          fi
+          exit 0
+
+      - name: Run Snyk scan (Python)
+        id: snyk_python
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          set +e
+          snyk test --file=src/scanner/requirements.txt --package-manager=pip --json-file-output $REPORT_DIR/snyk_python.json --severity-threshold=high
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          if [ "$EXIT_CODE" -eq 0 ]; then
+            echo "status=pass" >> $GITHUB_OUTPUT
+          else
+            echo "status=fail" >> $GITHUB_OUTPUT
+          fi
+          exit 0
+
+      - name: Combine Snyk reports
+        run: |
+          jq -n --slurpfile node $REPORT_DIR/snyk_node.json --slurpfile python $REPORT_DIR/snyk_python.json '{node: $node[0], python: $python[0]}' > $REPORT_DIR/snyk_report.json
+
+      - name: Run Custom Python PII Scanner
+        id: pii
+        continue-on-error: true
+        run: |
+          set +e
+          python src/scanner/scanner.py --output $REPORT_DIR/pii_report.json
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          if [ "$EXIT_CODE" -eq 0 ]; then
+            echo "status=pass" >> $GITHUB_OUTPUT
+          else
+            echo "status=fail" >> $GITHUB_OUTPUT
+          fi
+          exit 0
+
+      - name: Run OWASP ZAP Authenticated Scan
+        id: zap
+        continue-on-error: true
+        timeout-minutes: 40
+        run: |
+          set +e
+          docker run -v $(pwd):/zap/wrk -t owasp/zap2docker-stable \
+            zap-full-scan.py \
+              -t http://localhost:3000 \
+              -c zap/zap-context.context \
+              -r $REPORT_DIR/zap_report.html \
+              -J $REPORT_DIR/zap_report.json \
+              -x $REPORT_DIR/zap_report.xml
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          if [ "$EXIT_CODE" -eq 0 ]; then
+            echo "status=pass" >> $GITHUB_OUTPUT
+          else
+            echo "status=fail" >> $GITHUB_OUTPUT
+          fi
+          exit 0
+
+      - name: Stop Next.js server
+        if: always()
+        run: |
+          if [ -f /tmp/next.pid ]; then
+            kill $(cat /tmp/next.pid) || true
+          fi
+          if [ -f /tmp/next.log ]; then
+            echo "--- Next.js server log ---"
+            tail -n 200 /tmp/next.log || true
+          fi
+
+      - name: Upload scan reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: ${{ env.REPORT_DIR }}
+
+      - name: Summarize scan results
+        id: summarize
+        if: always()
+        env:
+          GITLEAKS: ${{ steps.gitleaks.outputs.status }}
+          SNYK_NODE: ${{ steps.snyk_node.outputs.status }}
+          SNYK_PYTHON: ${{ steps.snyk_python.outputs.status }}
+          PII: ${{ steps.pii.outputs.status }}
+          ZAP: ${{ steps.zap.outputs.status }}
+          REPORT_DIR: ${{ env.REPORT_DIR }}
+        run: |
+          declare -a failed
+          summary="GitLeaks: ${GITLEAKS:-not-run}\nSnyk (Node): ${SNYK_NODE:-not-run}\nSnyk (Python): ${SNYK_PYTHON:-not-run}\nPII Scanner: ${PII:-not-run}\nZAP: ${ZAP:-not-run}"
+          echo -e "$summary" > "$REPORT_DIR/scan_summary.txt"
+          if [ "$GITLEAKS" = "fail" ]; then failed+=("GitLeaks"); fi
+          if [ "$SNYK_NODE" = "fail" ] || [ "$SNYK_PYTHON" = "fail" ]; then failed+=("Snyk"); fi
+          if [ "$PII" = "fail" ]; then failed+=("PII Scanner"); fi
+          if [ "$ZAP" = "fail" ]; then failed+=("ZAP"); fi
+
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "failed=true" >> $GITHUB_OUTPUT
+            echo "failed_list=${failed[*]}" >> $GITHUB_OUTPUT
+          else
+            echo "failed=false" >> $GITHUB_OUTPUT
+          fi
+          echo "summary<<'EOF'" >> $GITHUB_OUTPUT
+          echo -e "$summary" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Slack notification (on failure)
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          FAILED: ${{ steps.summarize.outputs.failed }}
+          FAILED_LIST: ${{ steps.summarize.outputs.failed_list }}
+          SUMMARY: ${{ steps.summarize.outputs.summary }}
+        run: |
+          if [ "$FAILED" != "true" ]; then
+            echo "No failures detected; skipping Slack notification."
+            exit 0
+          fi
+          if [ -z "$SLACK_WEBHOOK" ]; then
+            echo "Slack webhook not configured; skipping notification."
+            exit 0
+          fi
+          payload=$(jq -n --arg text "Security pipeline failed for ${{ github.workflow }} on ${{ github.ref }}. Failed checks: ${FAILED_LIST}." --arg summary "$SUMMARY" '{text: ($text + "\n" + $summary)}')
+          curl -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK"
+
+      - name: Post PR comment summary
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/github-script@v7
+        env:
+          SUMMARY: ${{ steps.summarize.outputs.summary }}
+          FAILED: ${{ steps.summarize.outputs.failed }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const summary = process.env.SUMMARY || 'No summary available.';
+            const failed = process.env.FAILED === 'true';
+            const statusLine = failed ? ':x: Security pipeline detected issues.' : ':white_check_mark: Security pipeline passed.';
+            const body = `${statusLine}\n\n${summary}`;
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+      - name: Enforce scan results
+        run: |
+          if [ "${{ steps.summarize.outputs.failed }}" = "true" ]; then
+            echo "One or more scanners reported failures: ${{ steps.summarize.outputs.failed_list }}"
+            exit 1
+          fi
