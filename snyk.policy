@@ -1,0 +1,31 @@
+# Snyk policy for repository-wide scanning
+version: v1.0.0
+
+fail-thresholds:
+  critical: fail
+  high: fail
+  medium: warn
+  low: warn
+
+# Ignore known safe dev-only tooling and false positives originating from tooling packages
+ignore:
+  '*':
+    - reason: Dev-only dependency used for styling/build tooling; vulnerabilities here do not affect runtime artifacts.
+      expires: 2099-12-31T23:59:59.000Z
+      path:
+        - app/package.json > devDependencies > tailwindcss
+        - app/package.json > devDependencies > @tailwindcss/postcss
+    - reason: TypeScript/React type packages used only for development and not shipped to production.
+      expires: 2099-12-31T23:59:59.000Z
+      path:
+        - app/package.json > devDependencies > @types/node
+        - app/package.json > devDependencies > @types/react
+        - app/package.json > devDependencies > @types/react-dom
+    - reason: Linting/build toolchain packages that are known safe for this project.
+      expires: 2099-12-31T23:59:59.000Z
+      path:
+        - app/package.json > devDependencies > eslint
+        - app/package.json > devDependencies > eslint-config-next
+        - app/package.json > devDependencies > typescript
+        - app/package.json > devDependencies > babel-plugin-react-compiler
+patch: {}
