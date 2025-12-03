@@ -1,0 +1,11 @@
+{
+  "severityThreshold": "high",
+  "report": {
+    "json": true,
+    "jsonFileOutput": "reports/snyk_report.json"
+  },
+  "scan": {
+    "dependencyTree": true,
+    "languages": ["python", "javascript", "typescript"]
+  }
+}
