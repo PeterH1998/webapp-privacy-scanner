@@ -1,0 +1,6 @@
+title = "Webapp Privacy Scanner GitLeaks Config"
+
+[[rules]]
+description = "Ignore env example files"
+path = '''.*\.env\.example$'''
+allowlist = true
