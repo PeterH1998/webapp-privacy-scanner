@@ -61,7 +61,7 @@ jobs:
           echo $! > /tmp/next.pid
           for i in {1..30}; do
             if curl -sSf http://localhost:3000/login >/dev/null; then
-              echo "ready=true" >> $GITHUB_OUTPUT
+              echo "ready=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             sleep 5
@@ -89,11 +89,11 @@ jobs:
             --report-format json \
             --exit-code 1
           EXIT_CODE=$?
-          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
           if [ "$EXIT_CODE" -eq 0 ]; then
-            echo "status=pass" >> $GITHUB_OUTPUT
+            echo "status=pass" >> "$GITHUB_OUTPUT"
           else
-            echo "status=fail" >> $GITHUB_OUTPUT
+            echo "status=fail" >> "$GITHUB_OUTPUT"
           fi
           exit 0
 
@@ -111,11 +111,11 @@ jobs:
           mkdir -p "$REPORT_DIR"
           snyk test --json-file-output $REPORT_DIR/snyk_node.json --severity-threshold=high
           EXIT_CODE=$?
-          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
           if [ "$EXIT_CODE" -eq 0 ]; then
-            echo "status=pass" >> $GITHUB_OUTPUT
+            echo "status=pass" >> "$GITHUB_OUTPUT"
           else
-            echo "status=fail" >> $GITHUB_OUTPUT
+            echo "status=fail" >> "$GITHUB_OUTPUT"
           fi
           exit 0
 
@@ -129,11 +129,11 @@ jobs:
           mkdir -p "$REPORT_DIR"
           snyk test --file=src/scanner/requirements.txt --package-manager=pip --json-file-output $REPORT_DIR/snyk_python.json --severity-threshold=high
           EXIT_CODE=$?
-          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
           if [ "$EXIT_CODE" -eq 0 ]; then
-            echo "status=pass" >> $GITHUB_OUTPUT
+            echo "status=pass" >> "$GITHUB_OUTPUT"
           else
-            echo "status=fail" >> $GITHUB_OUTPUT
+            echo "status=fail" >> "$GITHUB_OUTPUT"
           fi
           exit 0
 
@@ -154,11 +154,11 @@ jobs:
           set +e
           python src/scanner/scanner.py --output $REPORT_DIR/pii_report.json
           EXIT_CODE=$?
-          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
           if [ "$EXIT_CODE" -eq 0 ]; then
-            echo "status=pass" >> $GITHUB_OUTPUT
+            echo "status=pass" >> "$GITHUB_OUTPUT"
           else
-            echo "status=fail" >> $GITHUB_OUTPUT
+            echo "status=fail" >> "$GITHUB_OUTPUT"
           fi
           exit 0
 
@@ -178,11 +178,11 @@ jobs:
               -J "$CONTAINER_REPORT_DIR/zap_report.json" \
               -x "$CONTAINER_REPORT_DIR/zap_report.xml"
           EXIT_CODE=$?
-          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
           if [ "$EXIT_CODE" -eq 0 ]; then
-            echo "status=pass" >> $GITHUB_OUTPUT
+            echo "status=pass" >> "$GITHUB_OUTPUT"
           else
-            echo "status=fail" >> $GITHUB_OUTPUT
+            echo "status=fail" >> "$GITHUB_OUTPUT"
           fi
           exit 0
 
@@ -225,14 +225,16 @@ jobs:
           if [ "$ZAP" = "fail" ]; then failed+=("ZAP"); fi
 
           if [ ${#failed[@]} -gt 0 ]; then
-            echo "failed=true" >> $GITHUB_OUTPUT
-            echo "failed_list=${failed[*]}" >> $GITHUB_OUTPUT
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+            echo "failed_list=${failed[*]}" >> "$GITHUB_OUTPUT"
           else
-            echo "failed=false" >> $GITHUB_OUTPUT
+            echo "failed=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "summary<<EOF" >> $GITHUB_OUTPUT
-          echo -e "$summary" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "summary<<EOF"
+            printf '%s\n' "$summary"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Slack notification (on failure)
         if: always()
