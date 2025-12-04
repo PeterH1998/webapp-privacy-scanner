@@ -230,7 +230,7 @@ jobs:
           else
             echo "failed=false" >> $GITHUB_OUTPUT
           fi
-          echo "summary<<'EOF'" >> $GITHUB_OUTPUT
+          echo "summary<<EOF" >> $GITHUB_OUTPUT
           echo -e "$summary" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
