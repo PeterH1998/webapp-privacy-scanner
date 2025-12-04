@@ -19,18 +19,21 @@ jobs:
     strategy:
       fail-fast: false
     env:
-      REPORT_DIR: reports
+      REPORT_DIR: ${{ github.workspace }}/reports
       NODE_ENV: production
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Create reports directory
+        run: mkdir -p $REPORT_DIR
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 18
           cache: npm
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: app/package-lock.json
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -39,21 +42,21 @@ jobs:
           cache: 'pip'
           cache-dependency-path: src/scanner/requirements.txt
 
-      - name: Create reports directory
-        run: mkdir -p $REPORT_DIR
-
       - name: Install Python dependencies
         run: pip install -r src/scanner/requirements.txt
 
       - name: Install Node dependencies
+        working-directory: app
         run: npm ci
 
       - name: Build Next.js app
+        working-directory: app
         run: npm run build
 
       - name: Start Next.js server
         id: start_server
         run: |
+          cd app
           nohup npm start -- --port 3000 > /tmp/next.log 2>&1 &
           echo $! > /tmp/next.pid
           for i in {1..30}; do
@@ -102,8 +105,10 @@ jobs:
         continue-on-error: true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        working-directory: app
         run: |
           set +e
+          mkdir -p "$REPORT_DIR"
           snyk test --json-file-output $REPORT_DIR/snyk_node.json --severity-threshold=high
           EXIT_CODE=$?
           echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
@@ -121,6 +126,7 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           set +e
+          mkdir -p "$REPORT_DIR"
           snyk test --file=src/scanner/requirements.txt --package-manager=pip --json-file-output $REPORT_DIR/snyk_python.json --severity-threshold=high
           EXIT_CODE=$?
           echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
@@ -132,8 +138,14 @@ jobs:
           exit 0
 
       - name: Combine Snyk reports
+        if: always()
         run: |
-          jq -n --slurpfile node $REPORT_DIR/snyk_node.json --slurpfile python $REPORT_DIR/snyk_python.json '{node: $node[0], python: $python[0]}' > $REPORT_DIR/snyk_report.json
+          mkdir -p "$REPORT_DIR"
+          NODE_REPORT="$REPORT_DIR/snyk_node.json"
+          PY_REPORT="$REPORT_DIR/snyk_python.json"
+          [ -f "$NODE_REPORT" ] || echo '{}' > "$NODE_REPORT"
+          [ -f "$PY_REPORT" ] || echo '{}' > "$PY_REPORT"
+          jq -n --slurpfile node "$NODE_REPORT" --slurpfile python "$PY_REPORT" '{node: $node[0], python: $python[0]}' > "$REPORT_DIR/snyk_report.json"
 
       - name: Run Custom Python PII Scanner
         id: pii
@@ -156,13 +168,15 @@ jobs:
         timeout-minutes: 40
         run: |
           set +e
+          mkdir -p "$REPORT_DIR"
+          CONTAINER_REPORT_DIR="/zap/wrk/reports"
           docker run -v $(pwd):/zap/wrk -t owasp/zap2docker-stable \
             zap-full-scan.py \
               -t http://localhost:3000 \
               -c zap/zap-context.context \
-              -r $REPORT_DIR/zap_report.html \
-              -J $REPORT_DIR/zap_report.json \
-              -x $REPORT_DIR/zap_report.xml
+              -r "$CONTAINER_REPORT_DIR/zap_report.html" \
+              -J "$CONTAINER_REPORT_DIR/zap_report.json" \
+              -x "$CONTAINER_REPORT_DIR/zap_report.xml"
           EXIT_CODE=$?
           echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
           if [ "$EXIT_CODE" -eq 0 ]; then
@@ -201,6 +215,7 @@ jobs:
           ZAP: ${{ steps.zap.outputs.status }}
           REPORT_DIR: ${{ env.REPORT_DIR }}
         run: |
+          mkdir -p "$REPORT_DIR"
           declare -a failed
           summary="GitLeaks: ${GITLEAKS:-not-run}\nSnyk (Node): ${SNYK_NODE:-not-run}\nSnyk (Python): ${SNYK_PYTHON:-not-run}\nPII Scanner: ${PII:-not-run}\nZAP: ${ZAP:-not-run}"
           echo -e "$summary" > "$REPORT_DIR/scan_summary.txt"
