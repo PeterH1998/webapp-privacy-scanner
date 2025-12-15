@@ -30,5 +30,6 @@ failOnSeverity = "high"
   paths = [
     '''(?i).*\.env\.example$''',
     '''^docs/examples/.*''',
-    '''^tests/fixtures/.*'''
+    '''^tests/fixtures/.*''',
+    '''(?i)^test-fixtures/.*'''
   ]

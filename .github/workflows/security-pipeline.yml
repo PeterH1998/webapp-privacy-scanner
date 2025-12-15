@@ -133,8 +133,55 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          python src/scanner/scanner.py --output "$REPORT_DIR/pii_report.json"
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          python src/scanner/scanner.py --root app --output "$REPORT_DIR/pii_app.json"
+          exit_app=$?
+
+          python src/scanner/scanner.py --root src --output "$REPORT_DIR/pii_src.json"
+          exit_src=$?
+
+          python - <<'PY'
+          import json
+          import os
+          from datetime import datetime
+          from pathlib import Path
+
+          report_dir = Path(os.environ["REPORT_DIR"])
+          combined_path = report_dir / "pii_report.json"
+          issue_sets = []
+
+          for name in ("pii_app.json", "pii_src.json"):
+              path = report_dir / name
+              if path.exists():
+                  with path.open("r", encoding="utf-8") as handle:
+                      data = json.load(handle)
+                      issue_sets.extend(data.get("issues", []))
+
+          summary = {
+              "high": sum(1 for issue in issue_sets if issue.get("severity") == "high"),
+              "medium": sum(1 for issue in issue_sets if issue.get("severity") == "medium"),
+              "low": sum(1 for issue in issue_sets if issue.get("severity") == "low"),
+          }
+
+          combined = {
+              "generated_at": datetime.utcnow().isoformat() + "Z",
+              "repository_root": "app/ and src/",
+              "issues": issue_sets,
+              "summary": {
+                  "total_findings": len(issue_sets),
+                  "by_severity": summary,
+              },
+          }
+
+          combined_path.parent.mkdir(parents=True, exist_ok=True)
+          with combined_path.open("w", encoding="utf-8") as handle:
+              json.dump(combined, handle, indent=2)
+          PY
+
+          if [ $exit_app -ne 0 ] || [ $exit_src -ne 0 ]; then
+            echo "exit_code=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+          fi
           exit 0
 
       - name: Run OWASP ZAP Authenticated Scan
