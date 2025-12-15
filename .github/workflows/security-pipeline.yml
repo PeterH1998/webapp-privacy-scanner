@@ -89,14 +89,7 @@ jobs:
             --report-path "$REPORT_DIR/gitleaks.json" \
             --report-format json \
             --exit-code 1
-          EXIT_CODE=$?
-          gitleaks detect \
-            --source . \
-            --config gitleaks.toml \
-            --report-path "$REPORT_DIR/gitleaks.sarif" \
-            --report-format sarif \
-            --exit-code 0
-          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Install Snyk CLI
@@ -159,56 +152,60 @@ jobs:
         if: always()
         env:
           REPORT_DIR: ${{ env.REPORT_DIR }}
-          GITLEAKS_EXIT: ${{ steps.gitleaks.outputs.exit_code }}
-          SNYK_NODE_EXIT: ${{ steps.snyk_node.outputs.exit_code }}
-          SNYK_PYTHON_EXIT: ${{ steps.snyk_python.outputs.exit_code }}
-          PII_EXIT: ${{ steps.pii.outputs.exit_code }}
-          ZAP_EXIT: ${{ steps.zap.outputs.exit_code }}
         run: |
           python - <<'PY'
           import json
-          import os
           import sys
           from pathlib import Path
 
-          report_dir = Path(os.environ["REPORT_DIR"])
+          report_dir = Path("${REPORT_DIR}")
           policy_failed = False
           summary = []
 
-          def load_json(p):
-              return json.load(p.open()) if p.exists() else None
+          def load_json(path):
+              if not path.exists():
+                  return None
+              with path.open("r", encoding="utf-8") as f:
+                  return json.load(f)
 
-          # GitLeaks
+          # --- GitLeaks (JSON is a LIST) ---
           gl = load_json(report_dir / "gitleaks.json")
-          gl_count = len(gl.get("findings", [])) if gl else -1
-          summary.append(f"GitLeaks: {gl_count}")
-          if gl_count > 0:
+          if isinstance(gl, list):
+              gl_count = len(gl)
+              summary.append(f"GitLeaks: {gl_count} findings")
+              if gl_count > 0:
+                  policy_failed = True
+          else:
+              summary.append("GitLeaks: report missing or invalid")
               policy_failed = True
 
-          # Snyk
+          # --- Snyk ---
           def snyk_high(path):
               data = load_json(path)
               if not data:
                   return -1
               return sum(
-                  1 for r in data.get("runs", [])
-                  for res in r.get("results", [])
+                  1
+                  for run in data.get("runs", [])
+                  for res in run.get("results", [])
                   if str(res.get("properties", {}).get("severity", "")).lower() in ("high", "critical")
               )
 
-          snyk_total = max(snyk_high(report_dir / "snyk_node.sarif"), 0) + max(snyk_high(report_dir / "snyk_python.sarif"), 0)
-          summary.append(f"Snyk high/critical: {snyk_total}")
+          snyk_total = max(snyk_high(report_dir / "snyk_node.sarif"), 0) + max(
+              snyk_high(report_dir / "snyk_python.sarif"), 0
+          )
+          summary.append(f"Snyk HIGH/CRITICAL: {snyk_total}")
           if snyk_total > 0:
               policy_failed = True
 
-          # PII
+          # --- PII ---
           pii = load_json(report_dir / "pii_report.json")
-          pii_count = len(pii.get("issues", [])) if pii else -1
-          summary.append(f"PII findings: {pii_count}")
+          pii_count = len(pii.get("issues", [])) if isinstance(pii, dict) else -1
+          summary.append(f"PII non-allowlisted: {pii_count}")
           if pii_count > 0:
               policy_failed = True
 
-          # ZAP
+          # --- ZAP ---
           zap = load_json(report_dir / "zap_report.json")
           zap_high = 0
           if zap:
@@ -242,4 +239,3 @@ jobs:
             echo "--- Next.js server log ---"
             tail -n 200 /tmp/next.log || true
           fi
-
