@@ -20,6 +20,7 @@ jobs:
       fail-fast: false
     env:
       REPORT_DIR: ${{ github.workspace }}/reports
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -96,11 +97,6 @@ jobs:
             --report-format sarif \
             --exit-code 0
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
-          if [ "$EXIT_CODE" -eq 0 ]; then
-            echo "status=pass" >> "$GITHUB_OUTPUT"
-          else
-            echo "status=fail" >> "$GITHUB_OUTPUT"
-          fi
           exit 0
 
       - name: Install Snyk CLI
@@ -114,19 +110,12 @@ jobs:
         working-directory: app
         run: |
           set +e
-          mkdir -p "$REPORT_DIR"
           snyk test \
             --json-file-output "$REPORT_DIR/snyk_node.json" \
             --sarif-file-output "$REPORT_DIR/snyk_node.sarif" \
             --severity-threshold=high \
             --policy-path "${GITHUB_WORKSPACE}/snyk.policy"
-          EXIT_CODE=$?
-          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
-          if [ "$EXIT_CODE" -eq 0 ]; then
-            echo "status=pass" >> "$GITHUB_OUTPUT"
-          else
-            echo "status=fail" >> "$GITHUB_OUTPUT"
-          fi
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Run Snyk scan (Python)
@@ -136,19 +125,14 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           set +e
-          mkdir -p "$REPORT_DIR"
-          snyk test --file=src/scanner/requirements.txt --package-manager=pip \
+          snyk test \
+            --file=src/scanner/requirements.txt \
+            --package-manager=pip \
             --json-file-output "$REPORT_DIR/snyk_python.json" \
             --sarif-file-output "$REPORT_DIR/snyk_python.sarif" \
             --severity-threshold=high \
             --policy-path "${GITHUB_WORKSPACE}/snyk.policy"
-          EXIT_CODE=$?
-          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
-          if [ "$EXIT_CODE" -eq 0 ]; then
-            echo "status=pass" >> "$GITHUB_OUTPUT"
-          else
-            echo "status=fail" >> "$GITHUB_OUTPUT"
-          fi
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Run Custom Python PII Scanner
@@ -156,34 +140,18 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          mkdir -p "$REPORT_DIR"
           python src/scanner/scanner.py --output "$REPORT_DIR/pii_report.json"
-          EXIT_CODE=$?
-          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
-          if [ "$EXIT_CODE" -eq 0 ]; then
-            echo "status=pass" >> "$GITHUB_OUTPUT"
-          else
-            echo "status=fail" >> "$GITHUB_OUTPUT"
-          fi
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Run OWASP ZAP Authenticated Scan
         id: zap
         continue-on-error: true
         timeout-minutes: 40
-        env:
-          REPORT_DIR: ${{ env.REPORT_DIR }}
         run: |
           set +e
-          mkdir -p "$REPORT_DIR"
           zap/run-zap.sh
-          EXIT_CODE=$?
-          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
-          if [ "$EXIT_CODE" -eq 0 ]; then
-            echo "status=pass" >> "$GITHUB_OUTPUT"
-          else
-            echo "status=fail" >> "$GITHUB_OUTPUT"
-          fi
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Aggregate and enforce security policy
@@ -197,130 +165,65 @@ jobs:
           PII_EXIT: ${{ steps.pii.outputs.exit_code }}
           ZAP_EXIT: ${{ steps.zap.outputs.exit_code }}
         run: |
-          mkdir -p "$REPORT_DIR"
           python - <<'PY'
-import json
-import os
-import sys
-from pathlib import Path
+          import json
+          import os
+          import sys
+          from pathlib import Path
 
-report_dir = Path("${REPORT_DIR}")
-policy_failed = False
-summary_lines = []
+          report_dir = Path(os.environ["REPORT_DIR"])
+          policy_failed = False
+          summary = []
 
+          def load_json(p):
+              return json.load(p.open()) if p.exists() else None
 
-def parse_snyk_sarif(path: Path) -> int:
-    if not path.exists():
-        return -1
+          # GitLeaks
+          gl = load_json(report_dir / "gitleaks.json")
+          gl_count = len(gl.get("findings", [])) if gl else -1
+          summary.append(f"GitLeaks: {gl_count}")
+          if gl_count > 0:
+              policy_failed = True
 
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
+          # Snyk
+          def snyk_high(path):
+              data = load_json(path)
+              if not data:
+                  return -1
+              return sum(
+                  1 for r in data.get("runs", [])
+                  for res in r.get("results", [])
+                  if str(res.get("properties", {}).get("severity", "")).lower() in ("high", "critical")
+              )
 
-    count = 0
-    for run in data.get("runs", []):
-        for result in run.get("results", []):
-            severity = (result.get("properties", {}) or {}).get("severity")
-            if isinstance(severity, str) and severity.lower() in {"high", "critical"}:
-                count += 1
-    return count
+          snyk_total = max(snyk_high(report_dir / "snyk_node.sarif"), 0) + max(snyk_high(report_dir / "snyk_python.sarif"), 0)
+          summary.append(f"Snyk high/critical: {snyk_total}")
+          if snyk_total > 0:
+              policy_failed = True
 
+          # PII
+          pii = load_json(report_dir / "pii_report.json")
+          pii_count = len(pii.get("issues", [])) if pii else -1
+          summary.append(f"PII findings: {pii_count}")
+          if pii_count > 0:
+              policy_failed = True
 
-def parse_pii_report(path: Path) -> int:
-    if not path.exists():
-        return -1
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    return len(data.get("issues", []))
+          # ZAP
+          zap = load_json(report_dir / "zap_report.json")
+          zap_high = 0
+          if zap:
+              for site in zap.get("site", []):
+                  for alert in site.get("alerts", []):
+                      if str(alert.get("riskdesc", "")).lower().startswith("high"):
+                          zap_high += 1
+          summary.append(f"ZAP HIGH alerts: {zap_high}")
+          if zap_high > 0:
+              policy_failed = True
 
-
-def parse_zap_report(path: Path) -> int:
-    if not path.exists():
-        return -1
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-
-    def alert_is_high(alert: dict) -> bool:
-        risk_desc = str(alert.get("riskdesc", "")).lower()
-        if risk_desc.startswith("high"):
-            return True
-        risk_code = str(alert.get("riskcode", ""))
-        return risk_code == "3"
-
-    total = 0
-    for site in data.get("site", []):
-        for alert in site.get("alerts", []):
-            if alert_is_high(alert):
-                total += 1
-    return total
-
-
-def parse_gitleaks(path: Path) -> int:
-    if not path.exists():
-        return -1
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    return len(data.get("findings", []))
-
-
-gitleaks_exit = os.getenv("GITLEAKS_EXIT", "?")
-gitleaks_findings = parse_gitleaks(report_dir / "gitleaks.json")
-if gitleaks_findings >= 0:
-    summary_lines.append(f"GitLeaks: {gitleaks_findings} findings (exit {gitleaks_exit})")
-    if gitleaks_findings > 0:
-        policy_failed = True
-else:
-    summary_lines.append("GitLeaks: report missing")
-    policy_failed = True
-
-snyk_node_high = parse_snyk_sarif(report_dir / "snyk_node.sarif")
-snyk_python_high = parse_snyk_sarif(report_dir / "snyk_python.sarif")
-snyk_total_high = (snyk_node_high if snyk_node_high > 0 else 0) + (snyk_python_high if snyk_python_high > 0 else 0)
-node_exit = os.getenv("SNYK_NODE_EXIT", "?")
-python_exit = os.getenv("SNYK_PYTHON_EXIT", "?")
-
-if snyk_node_high >= 0 and snyk_python_high >= 0:
-    summary_lines.append(
-        f"Snyk: {snyk_total_high} HIGH/CRITICAL vulnerabilities (node={max(snyk_node_high,0)}, python={max(snyk_python_high,0)})"
-        f" | exits node={node_exit}, python={python_exit}"
-    )
-    if snyk_total_high > 0:
-        policy_failed = True
-else:
-    summary_lines.append("Snyk: report missing")
-    policy_failed = True
-
-pii_findings = parse_pii_report(report_dir / "pii_report.json")
-pii_exit = os.getenv("PII_EXIT", "?")
-if pii_findings >= 0:
-    summary_lines.append(f"PII: {pii_findings} non-allowlisted findings (exit {pii_exit})")
-    if pii_findings > 0:
-        policy_failed = True
-else:
-    summary_lines.append("PII: report missing")
-    policy_failed = True
-
-zap_high = parse_zap_report(report_dir / "zap_report.json")
-zap_exit = os.getenv("ZAP_EXIT", "?")
-if zap_high >= 0:
-    summary_lines.append(f"ZAP: {zap_high} HIGH alerts (exit {zap_exit})")
-    if zap_high > 0:
-        policy_failed = True
-else:
-    summary_lines.append("ZAP: report missing")
-    policy_failed = True
-
-for line in summary_lines:
-    print(line)
-
-status_line = "CI FAIL (policy violated)" if policy_failed else "CI PASS (policy upheld)"
-print(status_line)
-
-summary_path = report_dir / "policy_summary.txt"
-summary_path.write_text("\n".join(summary_lines + [status_line]), encoding="utf-8")
-
-if policy_failed:
-    sys.exit(1)
-PY
+          print("\n".join(summary))
+          print("CI FAIL" if policy_failed else "CI PASS")
+          sys.exit(1 if policy_failed else 0)
+          PY
 
       - name: Upload scan reports
         if: always()
