@@ -147,7 +147,7 @@ jobs:
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
           exit 0
 
-            - name: Aggregate and enforce security policy
+      - name: Aggregate and enforce security policy
         id: policy_gate
         if: always()
         env:
