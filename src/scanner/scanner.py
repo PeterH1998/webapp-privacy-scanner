@@ -81,6 +81,12 @@ def should_ignore_path(rel_path: Path, ignore_paths: Iterable[str]) -> bool:
     return False
 
 
+def normalize_match(text: str) -> str:
+    """Normalize matched text for stable allowlist comparisons."""
+
+    return text.strip()
+
+
 def is_allowed_match(text: str, allow_patterns: Iterable[str]) -> bool:
     return any(re.search(pattern, text) for pattern in allow_patterns)
 
@@ -95,7 +101,9 @@ def scan_file(file_path: Path, allow_patterns: Iterable[str]) -> List[Dict[str, 
     for line_no, line in enumerate(content.splitlines(), start=1):
         for pii_type, pattern in PII_PATTERNS.items():
             for match in pattern.finditer(line):
-                matched_text = match.group(0)
+                matched_text = normalize_match(match.group(0))
+
+                # Only allowlist decisions happen after normalization of the match
                 if is_allowed_match(matched_text, allow_patterns) or is_allowed_match(
                     line, allow_patterns
                 ):
@@ -184,17 +192,20 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    allow_paths, allow_patterns = load_allowlist(args.allowlist)
 
-    issues = scan_repository(args.root, allow_paths, allow_patterns)
-    write_report(args.output, issues, args.root)
+    try:
+        allow_paths, allow_patterns = load_allowlist(args.allowlist)
+        issues = scan_repository(args.root, allow_paths, allow_patterns)
+        write_report(args.output, issues, args.root)
+    except Exception as exc:  # pragma: no cover - defensive guard for CI clarity
+        print(f"PII scanner runtime error: {exc}")
+        sys.exit(2)
 
-    high_severity = [issue for issue in issues if issue["severity"] == "high"]
-    if high_severity:
-        print(f"High severity PII findings detected: {len(high_severity)}")
+    if issues:
+        print(f"PII findings detected (non-allowlisted): {len(issues)}")
         sys.exit(1)
 
-    print("PII scan completed with no high severity findings.")
+    print("PII scan completed with no non-allowlisted findings.")
 
 
 if __name__ == "__main__":

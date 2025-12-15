@@ -1,0 +1,8 @@
+{
+  "name": "fixture-high-risk",
+  "version": "1.0.0",
+  "description": "Deliberately vulnerable dependency set for Snyk policy validation",
+  "dependencies": {
+    "lodash": "4.17.19"
+  }
+}

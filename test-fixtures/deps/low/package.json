@@ -1,0 +1,8 @@
+{
+  "name": "fixture-low-risk",
+  "version": "1.0.0",
+  "description": "Dependency set expected to be free of high/critical issues (policy should pass)",
+  "dependencies": {
+    "uuid": "9.0.0"
+  }
+}

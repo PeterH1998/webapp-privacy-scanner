@@ -1,0 +1,2 @@
+# This email is intentionally allowlisted for scanner pass validation.
+testuser@test.local
