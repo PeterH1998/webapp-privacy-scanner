@@ -158,7 +158,7 @@ jobs:
           import sys
           from pathlib import Path
 
-          report_dir = Path("${REPORT_DIR}")
+          report_dir = Path(os.environ["REPORT_DIR"])
           policy_failed = False
           summary = []
 
