@@ -2,6 +2,14 @@
 
 This folder contains controlled injections used to validate the CI security pipeline. Each fixture is intentionally crafted to exercise a specific scanner and severity policy.
 
+## How to use these fixtures
+- **Baseline CI runs exclude this folder.** GitLeaks is allowlisted for `test-fixtures/`, and the custom PII scanner is invoked only against `app/` and `src/` so routine builds pass without touching the fixtures.
+- **Use fixtures only for controlled evaluation.** To force a failure, temporarily copy the relevant fixture into `app/` or `src/`, commit the change, and observe the CI failure. Revert the injection afterward to restore a clean baseline.
+- **Documented behavior for academic reproducibility:**
+  - Baseline (no fixture injection) → CI passes with zero GitLeaks and non-allowlisted PII findings.
+  - Injecting a secret fixture into `app/` or `src/` → GitLeaks reports findings; policy gate fails.
+  - Injecting a non-allowlisted PII fixture into `app/` or `src/` → PII scanner reports findings; policy gate fails.
+
 ## Secrets (GitLeaks)
 - **Path:** `test-fixtures/secrets/aws_key.txt`
 - **Payload:** Fake AWS-style access key pair.
