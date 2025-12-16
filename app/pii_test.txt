@@ -1,2 +1,0 @@
-# This non-allowlisted email should trigger the PII scanner policy gate.
-pii.leak@example.com
