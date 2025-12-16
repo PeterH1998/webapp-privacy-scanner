@@ -1,8 +1,8 @@
 {
-  "name": "fixture-low-risk",
+  "name": "fixture-high-risk",
   "version": "1.0.0",
-  "description": "Dependency set expected to be free of high/critical issues (policy should pass)",
+  "description": "Deliberately vulnerable dependency set for Snyk policy validation",
   "dependencies": {
-    "uuid": "9.0.0"
+    "lodash": "4.17.19"
   }
 }
