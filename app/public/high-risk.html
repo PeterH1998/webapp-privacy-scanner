@@ -1,8 +1,0 @@
-<!-- Reflected XSS fixture for ZAP high-risk validation -->
-<html>
-  <body>
-    <form action="/vulnerable?query=<script>alert('xss')</script>" method="GET">
-      <input type="text" name="query" value=""><button type="submit">Search</button>
-    </form>
-  </body>
-</html>
